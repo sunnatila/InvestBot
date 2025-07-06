@@ -1,1 +1,1 @@
-from .sheets_function import add_info_function
+from .sheets_function import add_info_to_sheet

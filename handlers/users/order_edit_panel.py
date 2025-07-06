@@ -102,11 +102,13 @@ async def get_debt_price(msg: types.Message, state: FSMContext):
 
 @dp.callback_query(OrderEditState.access_edit, F.data == 'save_product')
 async def save_order(call: CallbackQuery, state: FSMContext):
+    await call.message.delete()
+    sek_msg = await call.message.answer("⏳ Bir necha sekund kutib turing.")
     data = await state.get_data()
     pr_id = data['product_id']
     debt_price = data['debt_price']
     await db.update_order_by_id(pr_id, debt_price)
-    await call.message.delete()
+    await sek_msg.delete()
     await call.message.answer("✅ Ma'lumotlar muvaffaqiyatli tarzda o'zgartirildi.", reply_markup=add_info_button)
     await state.clear()
 
