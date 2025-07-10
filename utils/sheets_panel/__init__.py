@@ -1,1 +1,1 @@
-from .sheets_function import add_info_to_sheet
+from .sheets_function import add_info_to_sheet, add_order_to_sheets_async

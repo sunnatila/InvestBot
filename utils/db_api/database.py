@@ -1,22 +1,70 @@
-import sqlite3
-from datetime import datetime
+import aiosqlite
+from datetime import date
+import calendar
 from utils.sheets_panel import add_info_to_sheet
 
 
 class Database:
     def __init__(self, db_path='db.sqlite3'):
-        self.connection = sqlite3.connect(db_path)
-        self.cursor = self.connection.cursor()
+        self.db_path = db_path
+
+    # ----------------- HELPERS -----------------
+
+    async def _execute(self, query, params=(), fetchone=False, fetchall=False, commit=False):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")  # Agar foreign key ishlatilsa
+            cursor = await db.execute(query, params)
+            data = None
+            if fetchone:
+                data = await cursor.fetchone()
+            elif fetchall:
+                data = await cursor.fetchall()
+            if commit:
+                await db.commit()
+            await cursor.close()
+            return data
 
     # ------------- ORDER METHODS -------------
+
+    async def create_payment_dates(self, order_id: int, start_day: int, months: int):
+        today = date.today()
+        year = today.year
+        month = today.month
+
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+            async with db.execute("BEGIN"):
+                for i in range(months):
+                    current_month = month + i
+                    current_year = year + (current_month - 1) // 12
+                    current_month = (current_month - 1) % 12 + 1
+
+                    last_day = calendar.monthrange(current_year, current_month)[1]
+                    payment_day = start_day if start_day <= last_day else last_day
+
+                    payment_date = date(current_year, current_month, payment_day)
+                    query = """
+                        INSERT INTO payment_dates (order_id, payment_date, is_payment)
+                        VALUES (?, ?, False)
+                    """
+                    await db.execute(query, (order_id, payment_date))
+                await db.commit()
 
     async def add_order(self, user_name, phone, pr_name, pr_year, pr_type, pr_price,
                         pr_percent, debt_term, pay_day, first_pay=0):
 
         user = await self.get_user(user_name, phone)
         if not user:
-            self.cursor.execute("INSERT INTO order_users (name, phone_number) VALUES (?, ?)", (user_name, phone))
-            self.connection.commit()
+            await self._execute(
+                "INSERT INTO order_users (name, phone_number) VALUES (?, ?)",
+                (user_name, phone),
+                commit=True
+            )
             user = await self.get_user(user_name, phone)
 
         user_id = user[0]
@@ -24,43 +72,47 @@ class Database:
         total_debt = (pr_price - first_pay + benefit) if first_pay else (pr_price + benefit)
         per_month = round(total_debt / debt_term)
 
-        today = datetime.today().date()
-        order_id = self.cursor.execute("SELECT COUNT(id) FROM orders").fetchone()[0] + 1
-        pr_type_name = (await self.get_product_type(pr_type))[1]
+        today = date.today()
+        count = await self._execute("SELECT COUNT(id) FROM orders", fetchone=True)
+        order_id = count[0] + 1 if count else 1
 
-        self.cursor.execute("""
+        pr_type_row = await self.get_product_type(pr_type)
+        pr_type_name = pr_type_row[1] if pr_type_row else ""
+
+        await self._execute("""
             INSERT INTO orders (id, user_id, product_name, product_year, product_type_id, product_price,
                                 product_percentage, all_debt, debt_term, payment_date, first_payment, 
                                 per_month_debt, benefit, given_time, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (order_id, user_id, pr_name, pr_year, pr_type, pr_price, pr_percent,
-              total_debt, debt_term, pay_day, first_pay, per_month, benefit, today, today))
+              total_debt, debt_term, pay_day, first_pay, per_month, benefit, today, today),
+              commit=True)
 
-        self.connection.commit()
+        await self.create_payment_dates(order_id, pay_day, debt_term)
 
         await add_info_to_sheet(today, order_id, pr_name, pay_day, user_name, phone, pr_year,
                                 pr_price, pr_percent, pr_type_name, first_pay, per_month,
                                 debt_term, benefit, total_debt)
 
     async def update_order_by_id(self, order_id, pay_amount):
-        current_debt = self.cursor.execute("SELECT all_debt FROM orders WHERE id = ?", (order_id,)).fetchone()
-        if not current_debt:
+        current_debt_row = await self._execute("SELECT all_debt FROM orders WHERE id = ?", (order_id,), fetchone=True)
+        if not current_debt_row:
             return False
 
-        new_debt = max(float(current_debt[0]) - float(pay_amount), 0)
-        today = datetime.today().date()
+        new_debt = max(float(current_debt_row[0]) - float(pay_amount), 0)
+        today = date.today()
 
-        self.cursor.execute("UPDATE orders SET all_debt = ?, updated_at = ? WHERE id = ?",
-                            (new_debt, today, order_id))
-        self.connection.commit()
+        await self._execute("UPDATE orders SET all_debt = ?, updated_at = ? WHERE id = ?",
+                            (new_debt, today, order_id), commit=True)
 
         data = await self.get_order_by_id(order_id)
 
-        await add_info_to_sheet(
-            data[14], data[0], data[4], data[10], data[1], data[2],
-            data[5], data[6], data[7], data[3], data[11], data[12],
-            data[9], data[13], new_debt
-        )
+        if data:
+            await add_info_to_sheet(
+                data[14], data[0], data[4], data[10], data[1], data[2],
+                data[5], data[6], data[7], data[3], data[11], data[12],
+                data[9], data[13], new_debt
+            )
         return True
 
     async def get_orders_by_phone(self, phone):
@@ -75,7 +127,7 @@ class Database:
             LEFT JOIN product_types ON orders.product_type_id = product_types.id
             WHERE order_users.phone_number = ?
         """
-        return self.cursor.execute(query, (phone,)).fetchall() or None
+        return await self._execute(query, (phone,), fetchall=True)
 
     async def get_order_by_id(self, order_id):
         query = """
@@ -89,30 +141,40 @@ class Database:
             LEFT JOIN product_types ON orders.product_type_id = product_types.id
             WHERE orders.id = ?
         """
-        return self.cursor.execute(query, (order_id,)).fetchone()
+        return await self._execute(query, (order_id,), fetchone=True)
 
     # ------------- USER METHODS -------------
 
     async def get_user(self, name, phone):
-        return self.cursor.execute("SELECT * FROM order_users WHERE name = ? AND phone_number = ?",
-                                   (name, phone)).fetchone()
+        return await self._execute(
+            "SELECT * FROM order_users WHERE name = ? AND phone_number = ?",
+            (name, phone), fetchone=True
+        )
 
     async def get_user_by_number(self, number):
-        return self.cursor.execute("SELECT * FROM order_users WHERE phone_number = ?", (number,)).fetchone()
+        return await self._execute(
+            "SELECT * FROM order_users WHERE phone_number = ?",
+            (number,), fetchone=True
+        )
 
     # ------------- PRODUCT TYPE METHODS -------------
 
     async def add_product_type(self, type_name):
-        type_id = self.cursor.execute("SELECT COUNT(id) FROM product_types").fetchone()[0] + 1
-        self.cursor.execute("INSERT INTO product_types (id, name) VALUES (?, ?)", (type_id, type_name))
-        self.connection.commit()
+        count = await self._execute("SELECT COUNT(id) FROM product_types", fetchone=True)
+        type_id = count[0] + 1 if count else 1
+        await self._execute(
+            "INSERT INTO product_types (id, name) VALUES (?, ?)",
+            (type_id, type_name), commit=True
+        )
 
     async def get_product_types(self):
-        return self.cursor.execute("SELECT * FROM product_types").fetchall()
+        return await self._execute("SELECT * FROM product_types", fetchall=True)
 
     async def get_product_type(self, type_id):
-        return self.cursor.execute("SELECT * FROM product_types WHERE id = ?", (type_id,)).fetchone()
+        return await self._execute("SELECT * FROM product_types WHERE id = ?", (type_id,), fetchone=True)
+
+    async def get_product_type_by_name(self, name):
+        return await self._execute("SELECT * FROM product_types WHERE name = ?", (name,), fetchone=True)
 
     async def del_product_type(self, type_id):
-        self.cursor.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
-        self.connection.commit()
+        await self._execute("DELETE FROM product_types WHERE id = ?", (type_id,), commit=True)

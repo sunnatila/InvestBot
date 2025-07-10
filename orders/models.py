@@ -4,7 +4,7 @@ from django.db import models
 class OrderUser(models.Model):
     name = models.CharField(max_length=100)
     phone_number = models.CharField(max_length=20, null=True, blank=True)
-    tg_id = models.CharField(max_lenth=50, null=True, blank=True)
+    tg_id = models.CharField(max_length=50, null=True, blank=True)
     passport_id = models.CharField(max_length=20, null=True, blank=True)
 
     def __str__(self):
@@ -52,3 +52,18 @@ class ProductType(models.Model):
         verbose_name_plural = "Product Types"
         db_table = "product_types"
 
+
+
+class PaymentDate(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, null=True)
+    payment_date = models.DateField(auto_now_add=True)
+    is_payment = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"{self.order.product_name} - {self.payment_date}"
+
+
+    class Meta:
+        verbose_name = "Payment Date"
+        verbose_name_plural = "Payment Dates"
+        db_table = "payment_dates"

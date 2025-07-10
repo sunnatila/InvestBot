@@ -19,6 +19,7 @@ async def get_product_types():
         product_types = InlineKeyboardBuilder()
         for type in product_types_db:
             product_types.add(InlineKeyboardButton(text=type[1], callback_data=str(type[0])))
+        product_types.add(InlineKeyboardButton(text="➕ Qo'shimcha tur kiritish", callback_data="add_another"))
         return product_types.adjust(2).as_markup()
     else:
         return None
