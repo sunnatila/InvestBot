@@ -1,10 +1,10 @@
-from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 
 class OrderUser(models.Model):
     name = models.CharField(max_length=100)
     phone_number = models.CharField(max_length=20, null=True, blank=True)
+    tg_id = models.CharField(max_lenth=50, null=True, blank=True)
     passport_id = models.CharField(max_length=20, null=True, blank=True)
 
     def __str__(self):
