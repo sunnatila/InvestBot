@@ -1,13 +1,10 @@
 import asyncio
 import gspread
-import gspread_asyncio
-from datetime import date, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_formatting import (
     CellFormat, Color, format_cell_range, Borders, Border, TextRotation
 )
 from core.settings import BASE_DIR
-from calendar import monthrange
 
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
@@ -109,18 +106,10 @@ async def add_order_to_sheets_async(db, order_id):
     if not data:
         return
 
+    payment_data = await db.get_payment_dates(order_id)
     payment_dates = []
-    pay_day = data[10]
-    debt_term = data[9]
-    start_date = date.today()
-    for i in range(debt_term):
-        month = (start_date.month + i) % 12 + 1
-        year = start_date.year + ((start_date.month - 1 + i) // 12)
-
-        last_day = monthrange(year, month)[1]
-        day = pay_day if pay_day <= last_day else last_day
-        payment_dates.append(date(year, month, day).isoformat())
-
+    for payment_date in payment_data:
+        payment_dates.append(payment_date[1])
 
     await add_payment_dates_to_sheet(
         order_id=data[0],
@@ -131,40 +120,27 @@ async def add_order_to_sheets_async(db, order_id):
 
 
 async def add_payment_dates_to_sheet(order_id: int, user_name: str, order_name: str, dates: list, start_col=None):
-
     loop = asyncio.get_running_loop()
     worksheet = await loop.run_in_executor(None, get_sync_payment_worksheet)
 
     def col_num_to_letter(n):
         result = ""
         while n > 0:
-            n, remainder = divmod(n -1, 26)
+            n, remainder = divmod(n - 1, 26)
             result = chr(65 + remainder) + result
         return result
 
-    def col_letter_to_num(letter):
-        num = 0
-        for ch in letter:
-            num = num * 26 + (ord(ch.upper()) - 64)
-        return num
-
-    # Agar start_col berilmagan bo'lsa, oxirgi to'ldirilgan ustunni topamiz
     if start_col is None:
-        # Jadvaldagi barcha ma'lumotlarni olish
         all_values = await loop.run_in_executor(None, worksheet.get_all_values)
-
         max_col = 0
-        # Har bir qatordagi ustunlar sonini tekshirib, eng katta ustun raqamini topamiz
         for row in all_values:
             if len(row) > max_col:
                 max_col = len(row)
-
-        # Oxirgi ustundan keyingi ustunni boshlang'ich deb olamiz
         start_col = max_col + 1 if max_col > 0 else 1
 
     col_letter = col_num_to_letter(start_col)
 
-    # 1-qator: order_id
+
     await loop.run_in_executor(
         None,
         worksheet.update,
@@ -173,57 +149,43 @@ async def add_payment_dates_to_sheet(order_id: int, user_name: str, order_name: 
         {"valueInputOption": "USER_ENTERED"}
     )
 
-    # 2-qator: user_name va order_name bir katakda
+
     await loop.run_in_executor(
         None,
         worksheet.update,
         f"{col_letter}2",
-        [[f"User: {user_name}\nOrder: {order_name}"]],
+        [[f"Klent: {user_name}\nKredit: {order_name}"]],
         {"valueInputOption": "USER_ENTERED"}
     )
 
-    # To'lov kunlari 3-qatrdan boshlab vertikal yoziladi
+
     start_row = 3
-    date_strs = [str(d) for d in dates]
-    values = [[d] for d in date_strs]
-    end_row = start_row + len(values) - 1
+    date_strs = [[d] for d in dates]
+
+    end_row = start_row + len(date_strs) - 1
     range_str = f"{col_letter}{start_row}:{col_letter}{end_row}"
 
-    await loop.run_in_executor(None, worksheet.update, range_str, values)
+    await loop.run_in_executor(None, worksheet.update, range_str, date_strs)
 
-    # Formatlash: yuqoridan pastga barcha kataklar uchun qora chegaralar va markazlash
-    total_rows = 2 + len(values)  # 2 qator (id va user+order) + sanalar
+
+    total_rows = 2 + len(date_strs)
     full_range = f"{col_letter}1:{col_letter}{total_rows}"
 
     cell_format = CellFormat(
+        textRotation=TextRotation(vertical=False),
         horizontalAlignment='CENTER',
         verticalAlignment='MIDDLE',
         borders=Borders(
-            top=Border('SOLID', Color(0,0,0)),
-            bottom=Border('SOLID', Color(0,0,0)),
-            left=Border('SOLID', Color(0,0,0)),
-            right=Border('SOLID', Color(0,0,0))
+            top=Border('SOLID', Color(0, 0, 0)),
+            bottom=Border('SOLID', Color(0, 0, 0)),
+            left=Border('SOLID', Color(0, 0, 0)),
+            right=Border('SOLID', Color(0, 0, 0))
         ),
         backgroundColor=Color(0.9, 0.95, 1)
     )
-
     await loop.run_in_executor(None, format_cell_range, worksheet, full_range, cell_format)
 
-    # To'lov kunlari uchun vertikal yozuv faqat 3-qatrdan boshlanganligi uchun alohida formatlash
-    if len(values) > 0:
-        dates_range = f"{col_letter}{start_row}:{col_letter}{end_row}"
-        dates_format = CellFormat(
-            horizontalAlignment='CENTER',
-            verticalAlignment='MIDDLE',
-            borders=Borders(
-                top=Border('SOLID', Color(0,0,0)),
-                bottom=Border('SOLID', Color(0,0,0)),
-                left=Border('SOLID', Color(0,0,0)),
-                right=Border('SOLID', Color(0,0,0))
-            ),
-            backgroundColor=Color(0.9, 0.95, 1)
-        )
-        await loop.run_in_executor(None, format_cell_range, worksheet, dates_range, dates_format)
 
 
-    return start_col + 1
+async def update_payment_dates(order_id: int, date):
+    pass

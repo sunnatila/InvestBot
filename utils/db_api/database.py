@@ -26,34 +26,6 @@ class Database:
 
     # ------------- ORDER METHODS -------------
 
-    async def create_payment_dates(self, order_id: int, start_day: int, months: int):
-        today = date.today()
-        year = today.year
-        month = today.month
-
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
-
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA foreign_keys = ON")
-            async with db.execute("BEGIN"):
-                for i in range(months):
-                    current_month = month + i
-                    current_year = year + (current_month - 1) // 12
-                    current_month = (current_month - 1) % 12 + 1
-
-                    last_day = calendar.monthrange(current_year, current_month)[1]
-                    payment_day = start_day if start_day <= last_day else last_day
-
-                    payment_date = date(current_year, current_month, payment_day)
-                    query = """
-                        INSERT INTO payment_dates (order_id, payment_date, is_payment)
-                        VALUES (?, ?, False)
-                    """
-                    await db.execute(query, (order_id, payment_date))
-                await db.commit()
 
     async def add_order(self, user_name, phone, pr_name, pr_year, pr_type, pr_price,
                         pr_percent, debt_term, pay_day, first_pay=0):
@@ -88,7 +60,7 @@ class Database:
               total_debt, debt_term, pay_day, first_pay, per_month, benefit, today, today),
               commit=True)
 
-        await self.create_payment_dates(order_id, pay_day, debt_term)
+        await self.create_payment_dates(order_id, pay_day, debt_term, per_month)
 
         await add_info_to_sheet(today, order_id, pr_name, pay_day, user_name, phone, pr_year,
                                 pr_price, pr_percent, pr_type_name, first_pay, per_month,
@@ -125,7 +97,7 @@ class Database:
             FROM orders
             LEFT JOIN order_users ON orders.user_id = order_users.id
             LEFT JOIN product_types ON orders.product_type_id = product_types.id
-            WHERE order_users.phone_number = ?
+            WHERE order_users.phone_number = ? AND orders.all_debt > 0
         """
         return await self._execute(query, (phone,), fetchall=True)
 
@@ -143,6 +115,7 @@ class Database:
         """
         return await self._execute(query, (order_id,), fetchone=True)
 
+
     # ------------- USER METHODS -------------
 
     async def get_user(self, name, phone):
@@ -156,6 +129,11 @@ class Database:
             "SELECT * FROM order_users WHERE phone_number = ?",
             (number,), fetchone=True
         )
+
+
+    async def get_per_month_payment(self, order_id):
+        return await self._execute("SELECT per_month_debt FROM orders WHERE id = ?", (order_id,), fetchone=True)
+
 
     # ------------- PRODUCT TYPE METHODS -------------
 
@@ -178,3 +156,73 @@ class Database:
 
     async def del_product_type(self, type_id):
         await self._execute("DELETE FROM product_types WHERE id = ?", (type_id,), commit=True)
+
+
+    # ----------------- PAYMENT DATES METHODS -------------
+
+
+    async def create_payment_dates(self, order_id: int, start_day: int, months: int, per_month_payment):
+        today = date.today()
+        year = today.year
+        month = today.month
+
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+            async with db.execute("BEGIN"):
+                for i in range(months):
+                    current_month = month + i
+                    current_year = year + (current_month - 1) // 12
+                    current_month = (current_month - 1) % 12 + 1
+
+                    last_day = calendar.monthrange(current_year, current_month)[1]
+                    payment_day = start_day if start_day <= last_day else last_day
+
+                    payment_date = date(current_year, current_month, payment_day)
+                    count = await self._execute("SELECT COUNT(id) FROM payment_dates", fetchone=True)
+                    payment_id = count[0] + 1 if count else 1
+                    query = """
+                        INSERT INTO payment_dates (id, order_id, payment_date, payment_sum, is_payment)
+                        VALUES (?, ?, ?, ?, False)
+                    """
+                    await db.execute(query, (payment_id, order_id, payment_date, per_month_payment))
+                    await db.commit()
+
+
+    async def update_payment_sum(self, order_id, payment_sum, month_payment: bool = False, full_payment: bool = False):
+        if month_payment:
+            payment_id = await self._execute("SELECT id FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,), fetchone=True)
+            await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?", (True, payment_id[0]), commit=True)
+        elif full_payment:
+            await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE order_id = ?", (True, order_id), commit=True)
+        else:
+            payment_id = await self._execute("SELECT id, payment_sum FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,), fetchone=True)
+            pay_sum = payment_id[1] - payment_sum
+            if pay_sum == 0:
+                await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?", (True, payment_id[0]), commit=True)
+                return
+            await self._execute("UPDATE payment_dates SET payment_sum = ?, is_payment = ? WHERE id = ?", (pay_sum, False, payment_id[0]), commit=True)
+
+    async def get_monthly_payment_sum(self):
+        return await self._execute("SELECT payment_sum FROM payment_dates", fetchone=True)
+
+
+    async def get_payment_dates(self, order_id):
+        return await self._execute("SELECT * FROM payment_dates WHERE order_id = ?", (order_id,), fetchall=True)
+
+    async def get_previous_payment(self, order_id):
+        """
+        Oldingi oy uchun to'lov holatini qaytaradi.
+        Agar mavjud bo'lmasa None qaytaradi.
+        """
+        query = """
+            SELECT id, payment_sum, is_payment FROM payment_dates
+            WHERE order_id = ? AND is_payment = False
+        """
+        return await self._execute(query, (order_id,), fetchone=True)
+
+

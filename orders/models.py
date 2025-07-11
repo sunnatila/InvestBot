@@ -27,7 +27,7 @@ class Order(models.Model):
     per_month_debt = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     benefit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     first_payment = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    payment_date = models.DateField(null=True, blank=True)
+    payment_date = models.CharField(max_length=10, null=True, blank=True)
     given_time = models.DateField(auto_now=True)
     updated_at = models.DateField(auto_now_add=True)
 
@@ -57,6 +57,7 @@ class ProductType(models.Model):
 class PaymentDate(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, null=True)
     payment_date = models.DateField(auto_now_add=True)
+    payment_sum = models.DecimalField(max_digits=10, decimal_places=2)
     is_payment = models.BooleanField(default=False)
 
     def __str__(self):

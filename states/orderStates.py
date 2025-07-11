@@ -24,5 +24,7 @@ class OrderEditState(StatesGroup):
     phone_number = State()
     product_id = State()
     access_payment = State()
+    part_sum = State()
+    debt_price_monthly = State()
     debt_price = State()
     access_edit = State()

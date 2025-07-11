@@ -15,7 +15,9 @@ async def get_user_orders(number):
 order_keyboards = InlineKeyboardBuilder(
     markup=[
         [
-            InlineKeyboardButton(text="💵 To'lo'v qilish", callback_data='payment'),
+            InlineKeyboardButton(text="💵 Yarim to'lo'v qilish", callback_data='part_payment'),
+            InlineKeyboardButton(text="💵 Oylik To'lo'v qilish", callback_data='monthly_payment'),
+            InlineKeyboardButton(text="💵 To'liq To'lo'v qilish", callback_data='full_payment'),
             InlineKeyboardButton(text='🔙 Oynani yopish', callback_data='back')
         ]
     ]
