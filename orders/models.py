@@ -56,7 +56,7 @@ class ProductType(models.Model):
 
 class PaymentDate(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, null=True)
-    payment_date = models.DateField(auto_now_add=True)
+    payment_date = models.DateField()
     payment_sum = models.DecimalField(max_digits=10, decimal_places=2)
     is_payment = models.BooleanField(default=False)
 

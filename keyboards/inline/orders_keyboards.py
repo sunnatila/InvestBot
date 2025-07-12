@@ -7,7 +7,7 @@ async def get_user_orders(number):
     orders = await db.get_orders_by_phone(number)
     user_orders = InlineKeyboardBuilder()
     for order in orders:
-        user_orders.add(InlineKeyboardButton(text=str(order[1]), callback_data=str(order[0])))
+        user_orders.add(InlineKeyboardButton(text=str(order[4]), callback_data=str(order[0])))
     user_orders.add(InlineKeyboardButton(text="🔙 Oynani yopish", callback_data='back'))
     return user_orders.adjust(2).as_markup()
 
@@ -31,3 +31,13 @@ order_save_button = InlineKeyboardBuilder(
         ]
     ]
 ).adjust(2).as_markup()
+
+
+
+async def get_users():
+    users = await db.get_users()
+    users_keyboard = InlineKeyboardBuilder()
+    for user in users:
+        users_keyboard.add(InlineKeyboardButton(text=str(user[1]), callback_data=str(user[0])))
+    users_keyboard.add(InlineKeyboardButton(text="🔙 Oynani yopish", callback_data='back'))
+    return users_keyboard.adjust(2).as_markup()

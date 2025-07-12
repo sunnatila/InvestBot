@@ -105,11 +105,10 @@ async def add_order_to_sheets_async(db, order_id):
     data = await db.get_order_by_id(order_id)
     if not data:
         return
-
     payment_data = await db.get_payment_dates(order_id)
     payment_dates = []
     for payment_date in payment_data:
-        payment_dates.append(payment_date[1])
+        payment_dates.append(payment_date[4])
 
     await add_payment_dates_to_sheet(
         order_id=data[0],
@@ -187,5 +186,53 @@ async def add_payment_dates_to_sheet(order_id: int, user_name: str, order_name: 
 
 
 
-async def update_payment_dates(order_id: int, date):
-    pass
+async def update_payment_dates(order_id: int, date: str = None):
+    loop = asyncio.get_running_loop()
+    worksheet = await loop.run_in_executor(None, get_sync_payment_worksheet)
+
+    all_values = await loop.run_in_executor(None, worksheet.get_all_values)
+    header_row = all_values[0] if all_values else []
+    try:
+        col_index = header_row.index(str(order_id)) + 1
+    except ValueError:
+        return
+
+    rows = all_values[2:] if len(all_values) > 2 else []
+
+    date_cells = [row[col_index - 1] if len(row) >= col_index else "" for row in rows]
+
+    updated_dates = []
+
+    check_mark = " ✅"
+
+    if date is None:
+        for d in date_cells:
+            if not d.endswith(check_mark):
+                updated_dates.append(d + check_mark)
+            else:
+                updated_dates.append(d)
+    else:
+        for d in date_cells:
+            clean_d = d.lstrip(check_mark).strip()
+            if clean_d == date and not d.endswith(check_mark):
+                updated_dates.append(clean_d + check_mark)
+            else:
+                updated_dates.append(d)
+
+    start_row = 3
+    end_row = start_row + len(updated_dates) - 1
+
+    def col_num_to_letter(n):
+        result = ""
+        while n > 0:
+            n, remainder = divmod(n - 1, 26)
+            result = chr(65 + remainder) + result
+        return result
+
+    col_letter = col_num_to_letter(col_index)
+
+    range_str = f"{col_letter}{start_row}:{col_letter}{end_row}"
+
+    date_values = [[d] for d in updated_dates]
+
+    await loop.run_in_executor(None, worksheet.update, range_str, date_values)

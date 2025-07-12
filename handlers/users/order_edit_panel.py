@@ -8,14 +8,14 @@ from aiogram.types import CallbackQuery
 from keyboards.inline import (
     add_info_button, get_user_orders, order_keyboards, order_save_button
 )
-from loader import dp, db
+from loader import dp, db, bot
 from states.orderStates import OrderEditState
 
 
 @dp.callback_query(F.data == "edit_info")
 async def edit_order(call: CallbackQuery, state: FSMContext):
     await call.message.delete()
-    await call.message.answer("Mahsulotni o'zgartirish uchun mahsulotga tegishli"
+    await call.message.answer("Mahsulotni o'zgartirish uchun kreditga tegishli"
                               " telefon raqamini kiriting (+998 xx xxx xx xx) :"
                               )
     await state.set_state(OrderEditState.phone_number)
@@ -96,7 +96,6 @@ async def handle_payment_type(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     product_id = data['product_id']
 
-    # Oylik to'lov va to'lov holatini bazadan olish
     payment_info = await db.get_per_month_payment(product_id)
     if not payment_info:
         await call.message.answer("To'lov ma'lumotlari topilmadi.")
@@ -107,6 +106,7 @@ async def handle_payment_type(call: CallbackQuery, state: FSMContext):
 
     prev_payment = await db.get_previous_payment(product_id)
     await wait_msg.delete()
+    await state.update_data(payment_date=prev_payment[3])
 
     if call.data == 'part_payment':
         if prev_payment and not prev_payment[2] and prev_payment[1] != payment_sum:
@@ -117,7 +117,6 @@ async def handle_payment_type(call: CallbackQuery, state: FSMContext):
             await state.set_state(OrderEditState.debt_price)
             return
 
-        # Agar qisman to'lov bo'lsa, summani so'raymiz va validatsiya qilamiz
         elif payment_sum > 0:
             await call.message.answer(
                 f"Siz {payment_sum}$ gacha qisman to'lov qilishingiz mumkin.\n"
@@ -129,7 +128,6 @@ async def handle_payment_type(call: CallbackQuery, state: FSMContext):
             await state.clear()
 
     elif call.data == 'monthly_payment':
-        # Oldingi oy to'lovini tekshirish
         if prev_payment and not prev_payment[2] and prev_payment[1] != payment_sum:
             await call.message.answer(
                 "Siz oldingi oy uchun to'liq to'lov qilmagansiz.\n"
@@ -138,16 +136,14 @@ async def handle_payment_type(call: CallbackQuery, state: FSMContext):
             )
             return
 
-        # Oylik to'lov summasini so'raymiz
         await call.message.answer(
             f"Oylik to'lov summasini kiriting {payment_sum}$:"
         )
         await state.set_state(OrderEditState.debt_price_monthly)
-
     elif call.data == 'full_payment':
-        # To'lov summasini so'ramay, faqat tasdiqlashni so'raymiz
         await call.message.answer("To'lovni tasdiqlang.", reply_markup=order_save_button)
         await state.set_state(OrderEditState.access_edit)
+
 
 
 @dp.message(OrderEditState.part_sum)
@@ -197,12 +193,12 @@ async def process_debt_price(msg: types.Message, state: FSMContext):
 
     payment_sum = payment_info[1]
 
-    # To'lov summasi aniq oylik to'lovga teng bo'lishi kerak
     if pay_amount != payment_sum:
         await msg.answer(f"To'lov summasi aniq {payment_sum}$ bo'lishi kerak.")
         return
 
     await state.update_data(monthly_debt=pay_amount)
+    await state.update_data(payment_date=payment_info[3])
     await msg.answer("To'lovni tasdiqlang.", reply_markup=order_save_button)
     await state.set_state(OrderEditState.access_edit)
 
@@ -259,14 +255,16 @@ async def save_order(call: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Payment dates jadvalini yangilash uchun
     if 'part_debt' in data:
-        await db.update_payment_sum(pr_id, pay_amount)
+        await db.update_payment_sum(order_id=pr_id, payment_sum=pay_amount, payment_date=data['payment_date'])
     elif 'monthly_debt' in data:
-        await db.update_payment_sum(pr_id, pay_amount, month_payment=True)
+        await db.update_payment_sum(order_id=pr_id, payment_sum=pay_amount, payment_date=data['payment_date'], month_payment=True)
     else:
-        await db.update_payment_sum(pr_id, pay_amount, full_payment=True)
+        await db.update_payment_sum(order_id=pr_id, payment_sum=pay_amount, full_payment=True)
 
+    user_info = await db.get_user_by_number(data['phone_number'])
+    if user_info[4]:
+        await bot.send_message(chat_id=int(user_info[4]), text = f"✅ Sizning buyurtmangiz uchun {pay_amount}$ muvaffaqiyatli to'landi")
     await sek_msg.delete()
     await call.message.answer("✅ Ma'lumotlar muvaffaqiyatli tarzda o'zgartirildi.", reply_markup=add_info_button)
     await state.clear()

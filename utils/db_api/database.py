@@ -1,7 +1,9 @@
+import asyncio
+
 import aiosqlite
 from datetime import date
 import calendar
-from utils.sheets_panel import add_info_to_sheet
+from utils.sheets_panel import add_info_to_sheet, update_payment_dates
 
 
 class Database:
@@ -116,7 +118,32 @@ class Database:
         return await self._execute(query, (order_id,), fetchone=True)
 
 
+    async def get_per_month_payment(self, order_id):
+        return await self._execute("SELECT per_month_debt FROM orders WHERE id = ?", (order_id,), fetchone=True)
+
+    async def get_orders_by_tg_id(self, tg_id):
+        query = """
+            SELECT orders.id, orders.product_name
+            FROM orders
+            LEFT JOIN order_users ON orders.user_id = order_users.id
+            WHERE order_users.tg_id = ? AND orders.all_debt > 0
+        """
+        return await self._execute(query, (tg_id,), fetchall=True)
+
+
     # ------------- USER METHODS -------------
+
+
+    async def update_user_info(self, number, tg_id):
+        await self._execute(
+            "UPDATE order_users SET tg_id = ? WHERE phone_number = ?",
+            (tg_id, number), commit=True
+        )
+
+
+    async def get_users(self):
+        return await self._execute("SELECT * FROM order_users", fetchall=True)
+
 
     async def get_user(self, name, phone):
         return await self._execute(
@@ -131,8 +158,17 @@ class Database:
         )
 
 
-    async def get_per_month_payment(self, order_id):
-        return await self._execute("SELECT per_month_debt FROM orders WHERE id = ?", (order_id,), fetchone=True)
+    async def get_user_by_tg_id(self, tg_id: int = None, user_id: int = None):
+        if tg_id:
+            return await self._execute(
+                "SELECT * FROM order_users WHERE tg_id = ?",
+                (tg_id,), fetchone=True
+            )
+        else:
+            return await self._execute(
+                "SELECT * FROM order_users WHERE id = ?",
+                (user_id,), fetchone=True
+            )
 
 
     # ------------- PRODUCT TYPE METHODS -------------
@@ -193,36 +229,59 @@ class Database:
                     await db.commit()
 
 
-    async def update_payment_sum(self, order_id, payment_sum, month_payment: bool = False, full_payment: bool = False):
+    async def update_payment_sum(self, order_id: int, payment_sum: int | float, payment_date: str = None, month_payment: bool = False, full_payment: bool = False):
         if month_payment:
             payment_id = await self._execute("SELECT id FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,), fetchone=True)
             await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?", (True, payment_id[0]), commit=True)
+            asyncio.create_task(update_payment_dates(order_id, payment_date))
         elif full_payment:
             await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE order_id = ?", (True, order_id), commit=True)
+            asyncio.create_task(update_payment_dates(order_id))
         else:
             payment_id = await self._execute("SELECT id, payment_sum FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,), fetchone=True)
             pay_sum = payment_id[1] - payment_sum
             if pay_sum == 0:
                 await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?", (True, payment_id[0]), commit=True)
+                asyncio.create_task(update_payment_dates(order_id, payment_date))
                 return
             await self._execute("UPDATE payment_dates SET payment_sum = ?, is_payment = ? WHERE id = ?", (pay_sum, False, payment_id[0]), commit=True)
 
     async def get_monthly_payment_sum(self):
-        return await self._execute("SELECT payment_sum FROM payment_dates", fetchone=True)
+        return await self._execute("SELECT payment_sum, payment_date FROM payment_dates", fetchone=True)
 
 
     async def get_payment_dates(self, order_id):
         return await self._execute("SELECT * FROM payment_dates WHERE order_id = ?", (order_id,), fetchall=True)
 
     async def get_previous_payment(self, order_id):
-        """
-        Oldingi oy uchun to'lov holatini qaytaradi.
-        Agar mavjud bo'lmasa None qaytaradi.
-        """
         query = """
-            SELECT id, payment_sum, is_payment FROM payment_dates
+            SELECT id, payment_sum, is_payment, payment_date FROM payment_dates
             WHERE order_id = ? AND is_payment = False
         """
         return await self._execute(query, (order_id,), fetchone=True)
 
+    async def get_payment_info(self, order_id):
+        return await self._execute("""SELECT orders.product_name, orders.all_debt, payment_dates.payment_sum, payment_dates.payment_date, payment_dates.is_payment
+                                   FROM payment_dates
+                                   LEFT JOIN orders ON payment_dates.order_id = orders.id 
+                                   WHERE order_id = ?""", (order_id,), fetchall=True)
+
+    async def get_due_payments_today(self):
+        today = date.today()
+        query = """
+            SELECT
+                order_users.name,
+                order_users.phone_number,
+                order_users.tg_id,
+                orders.id AS order_id,
+                orders.product_name,
+                payment_dates.payment_date,
+                payment_dates.payment_sum
+            FROM payment_dates
+            JOIN orders ON payment_dates.order_id = orders.id
+            JOIN order_users ON orders.user_id = order_users.id
+            WHERE payment_dates.payment_date = ? AND payment_dates.is_payment = False AND orders.all_debt > 0 AND order_users.tg_id IS NOT NULL
+        """
+        results = await self._execute(query, (today,), fetchall=True)
+        return results
 
