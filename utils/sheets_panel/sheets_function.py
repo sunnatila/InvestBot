@@ -61,12 +61,15 @@ async def add_info_to_sheet(*args):
 
     loop = asyncio.get_running_loop()
     order_id = str(args[1])
-
     row_values = [
         str(args[0]), str(args[1]), args[2], str(args[3]), args[4],
         args[5], args[6], f"{args[7]} $", f"{args[8]}%", args[9],
         f"{args[10]} $", f"{args[11]} $", f"{args[12]} oy", f"{args[13]} $", f"{args[14]} $"
     ]
+    try:
+        row_values.append(f"{args[15]} $")
+    except IndexError:
+        pass
 
     worksheet = await loop.run_in_executor(None, get_sync_telegram_worksheet)
 

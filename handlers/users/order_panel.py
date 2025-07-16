@@ -344,6 +344,7 @@ async def save_product(call: CallbackQuery, state: FSMContext):
 
     if order_id:
         asyncio.create_task(add_order_to_sheets_async(db, order_id))
+    await asyncio.sleep(2)
     await sek_msg.delete()
     await call.message.answer("✅ Mahsulot muvaffaqiyatli qo'shildi.", reply_markup=add_info_button)
     await state.clear()

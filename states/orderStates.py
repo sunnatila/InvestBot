@@ -27,4 +27,6 @@ class OrderEditState(StatesGroup):
     part_sum = State()
     debt_price_monthly = State()
     debt_price = State()
+    full_debt_price = State()
     access_edit = State()
+    full_access_edit = State()

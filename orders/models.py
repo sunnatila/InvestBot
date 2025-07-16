@@ -28,6 +28,7 @@ class Order(models.Model):
     benefit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     first_payment = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     payment_date = models.CharField(max_length=10, null=True, blank=True)
+    all_harm = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     given_time = models.DateField(auto_now=True)
     updated_at = models.DateField(auto_now_add=True)
 
@@ -61,10 +62,12 @@ class PaymentDate(models.Model):
     is_payment = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"{self.order.product_name} - {self.payment_date}"
+        return f"{self.order.__str__()} - {self.payment_date}"
 
 
     class Meta:
         verbose_name = "Payment Date"
         verbose_name_plural = "Payment Dates"
         db_table = "payment_dates"
+
+

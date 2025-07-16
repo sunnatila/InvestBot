@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
 from keyboards.inline import (
-    add_info_button, get_user_orders, order_keyboards, order_save_button
+    add_info_button, get_user_orders, order_keyboards, order_save_button, confirm_monthly_or_full_payment
 )
 from loader import dp, db, bot
 from states.orderStates import OrderEditState
@@ -141,8 +141,11 @@ async def handle_payment_type(call: CallbackQuery, state: FSMContext):
         )
         await state.set_state(OrderEditState.debt_price_monthly)
     elif call.data == 'full_payment':
-        await call.message.answer("To'lovni tasdiqlang.", reply_markup=order_save_button)
-        await state.set_state(OrderEditState.access_edit)
+        await call.message.answer(
+            f"To'liq to'lo'v summasini kiriting ($):"
+        )
+        await state.set_state(OrderEditState.full_debt_price)
+
 
 
 
@@ -171,7 +174,7 @@ async def process_part_payment(msg: types.Message, state: FSMContext):
 
     await state.update_data(part_debt=pay_amount)
     await msg.answer("To'lovni tasdiqlang.", reply_markup=order_save_button)
-    await state.set_state(OrderEditState.access_edit)
+    await state.set_state(OrderEditState.full_access_edit)
 
 
 @dp.message(OrderEditState.debt_price)
@@ -200,7 +203,7 @@ async def process_debt_price(msg: types.Message, state: FSMContext):
     await state.update_data(monthly_debt=pay_amount)
     await state.update_data(payment_date=payment_info[3])
     await msg.answer("To'lovni tasdiqlang.", reply_markup=order_save_button)
-    await state.set_state(OrderEditState.access_edit)
+    await state.set_state(OrderEditState.full_access_edit)
 
 
 @dp.message(OrderEditState.debt_price_monthly)
@@ -221,17 +224,52 @@ async def process_monthly_payment(msg: types.Message, state: FSMContext):
         return
 
     payment_sum = payment_info[0]
-
+    await state.update_data(monthly_debt=pay_amount)
+    await state.update_data(payment_sum=payment_sum)
     if pay_amount != payment_sum:
-        await msg.answer(f"To'lov summasi aniq {payment_sum}$ bo'lishi kerak.")
+        await msg.answer(f"‼️ Siz oylik to'lo'vning miqdoridan kam to'lo'v qilyapsiz.\n"
+                         f"Oylik to'lo'vni tasdiqlaysizmi?",
+                         reply_markup=confirm_monthly_or_full_payment)
+        await state.set_state(OrderEditState.access_edit)
         return
 
-    await state.update_data(monthly_debt=pay_amount)
+
     await msg.answer("To'lovni tasdiqlang.", reply_markup=order_save_button)
-    await state.set_state(OrderEditState.access_edit)
+    await state.set_state(OrderEditState.full_access_edit)
 
 
-@dp.callback_query(OrderEditState.access_edit, F.data == 'save_product')
+@dp.message(StateFilter(OrderEditState.full_debt_price))
+async def get_full_debt_price(msg: types.Message, state: FSMContext):
+    text = msg.text.strip()
+    if not text.isdigit():
+        await msg.answer("Iltimos, faqat raqam kiriting.")
+        return
+    pay_amount = float(text)
+    data = await state.get_data()
+    product_id = data['product_id']
+
+    payment_info = await db.get_full_debt(product_id)
+    if not payment_info:
+        await msg.answer("To'lov ma'lumotlari topilmadi.")
+        await state.clear()
+        return
+
+
+    await state.update_data(full_debt=pay_amount)
+    await state.update_data(payment_sum=payment_info[0])
+    if pay_amount != payment_info[0]:
+        await msg.answer(f"‼️ Siz to'liq to'lo'vning miqdoridan kam to'lo'v qilyapsiz.\n"
+                         f"Oylik to'lo'vni tasdiqlaysizmi?",
+                         reply_markup=confirm_monthly_or_full_payment)
+        await state.set_state(OrderEditState.access_edit)
+        return
+
+
+    await msg.answer("To'lovni tasdiqlang.", reply_markup=order_save_button)
+    await state.set_state(OrderEditState.full_access_edit)
+
+
+@dp.callback_query(OrderEditState.full_access_edit, F.data == 'save_product')
 async def save_order(call: CallbackQuery, state: FSMContext):
     await call.message.delete()
     sek_msg = await call.message.answer("⏳ Bir necha sekund kutib turing.")
@@ -270,9 +308,55 @@ async def save_order(call: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
+@dp.callback_query(OrderEditState.access_edit, F.data == 'confirm_payment')
+async def save_order(call: CallbackQuery, state: FSMContext):
+    await call.message.delete()
+    sek_msg = await call.message.answer("⏳ Bir necha sekund kutib turing.")
+    data = await state.get_data()
+    pr_id = data['product_id']
+    pr_debt = data['payment_sum']
+    old_harm = (await db.get_all_harm(pr_id))[0]
+    pay_amount = 0
+    if 'monthly_debt' in data:
+        pay_amount = float(data['monthly_debt'])
+    else:
+        pay_amount = float(data['full_debt'])
+    damage = float(pr_debt) - float(pay_amount)
+    old_harm += damage
+    success = await db.update_order_by_id(pr_id, pay_amount, old_harm)
+    if not success:
+        await sek_msg.delete()
+        await call.message.answer("❌ To'lovni saqlashda xatolik yuz berdi.")
+        await state.clear()
+        return
 
-@dp.callback_query(OrderEditState.access_edit, F.data == 'cancel_product')
+    if 'monthly_debt' in data:
+        await db.update_payment_sum(order_id=pr_id, payment_sum=pay_amount, payment_date=data['payment_date'], damage=True, month_payment=True)
+    elif 'full_debt' in data:
+        await db.update_payment_sum(order_id=pr_id, payment_sum=pay_amount, damage=True, full_payment=True)
+    await asyncio.sleep(2)
+    user_info = await db.get_user_by_number(data['phone_number'])
+    if user_info[4]:
+        await bot.send_message(chat_id=int(user_info[4]), text = f"✅ Sizning buyurtmangiz uchun {pay_amount}$ muvaffaqiyatli to'landi")
+    await sek_msg.delete()
+    await call.message.answer(f"✅ Ma'lumotlar muvaffaqiyatli tarzda o'zgartirildi.\n"
+                              f"Zararning summasi: {old_harm} $", reply_markup=add_info_button)
+    await state.clear()
+
+
+@dp.callback_query(OrderEditState.full_access_edit, F.data == 'cancel_product')
 async def back_to_menu(call: CallbackQuery, state: FSMContext):
     await call.message.delete()
     await call.message.answer("‼️ Ma'lumot o'zgartirilmadi", reply_markup=add_info_button)
     await state.clear()
+
+
+@dp.callback_query(OrderEditState.access_edit, F.data == 'cancel_payment')
+async def back_to_menu(call: CallbackQuery, state: FSMContext):
+    await call.message.delete()
+    await call.message.answer("‼️ Ma'lumot o'zgartirilmadi", reply_markup=add_info_button)
+    await state.clear()
+
+
+
+

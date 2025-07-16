@@ -56,26 +56,37 @@ class Database:
         await self._execute("""
             INSERT INTO orders (id, user_id, product_name, product_year, product_type_id, product_price,
                                 product_percentage, all_debt, debt_term, payment_date, first_payment, 
-                                per_month_debt, benefit, given_time, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                per_month_debt, benefit, given_time, updated_at, all_harm)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         """, (order_id, user_id, pr_name, pr_year, pr_type, pr_price, pr_percent,
               total_debt, debt_term, pay_day, first_pay, per_month, benefit, today, today),
               commit=True)
 
         await self.create_payment_dates(order_id, pay_day, debt_term, per_month)
 
-        await add_info_to_sheet(today, order_id, pr_name, pay_day, user_name, phone, pr_year,
+        asyncio.create_task(add_info_to_sheet(today, order_id, pr_name, pay_day, user_name, phone, pr_year,
                                 pr_price, pr_percent, pr_type_name, first_pay, per_month,
-                                debt_term, benefit, total_debt)
+                                debt_term, benefit, total_debt, 0))
 
-    async def update_order_by_id(self, order_id, pay_amount):
+    async def update_order_by_id(self, order_id, pay_amount, damage: int | float = 0):
         current_debt_row = await self._execute("SELECT all_debt FROM orders WHERE id = ?", (order_id,), fetchone=True)
         if not current_debt_row:
             return False
 
         new_debt = max(float(current_debt_row[0]) - float(pay_amount), 0)
         today = date.today()
+        if damage:
+            await self._execute("UPDATE orders SET all_debt = ?, all_harm = ?, updated_at = ? WHERE id = ?",
+                                (new_debt, damage, today, order_id), commit=True)
+            data = await self.get_order_by_id(order_id)
 
+            if data:
+                await add_info_to_sheet(
+                    data[14], data[0], data[4], data[10], data[1], data[2],
+                    data[5], data[6], data[7], data[3], data[11], data[12],
+                    data[9], data[13], new_debt, damage
+                )
+            return True
         await self._execute("UPDATE orders SET all_debt = ?, updated_at = ? WHERE id = ?",
                             (new_debt, today, order_id), commit=True)
 
@@ -120,6 +131,13 @@ class Database:
 
     async def get_per_month_payment(self, order_id):
         return await self._execute("SELECT per_month_debt FROM orders WHERE id = ?", (order_id,), fetchone=True)
+
+
+    async def get_full_debt(self, order_id):
+        return await self._execute("SELECT all_debt FROM orders WHERE id = ?", (order_id,), fetchone=True)
+
+    async def get_all_harm(self, order_id):
+        return await self._execute("SELECT all_harm FROM orders WHERE id = ?", (order_id,), fetchone=True)
 
     async def get_orders_by_tg_id(self, tg_id):
         query = """
@@ -229,22 +247,43 @@ class Database:
                     await db.commit()
 
 
-    async def update_payment_sum(self, order_id: int, payment_sum: int | float, payment_date: str = None, month_payment: bool = False, full_payment: bool = False):
-        if month_payment:
-            payment_id = await self._execute("SELECT id FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,), fetchone=True)
-            await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?", (True, payment_id[0]), commit=True)
-            asyncio.create_task(update_payment_dates(order_id, payment_date))
-        elif full_payment:
-            await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE order_id = ?", (True, order_id), commit=True)
-            asyncio.create_task(update_payment_dates(order_id))
-        else:
-            payment_id = await self._execute("SELECT id, payment_sum FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,), fetchone=True)
-            pay_sum = payment_id[1] - payment_sum
-            if pay_sum == 0:
-                await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?", (True, payment_id[0]), commit=True)
+    async def update_payment_sum(self, order_id: int, payment_sum: int | float, payment_date: str = None, damage: bool = False, month_payment: bool = False, full_payment: bool = False):
+        if damage:
+            if month_payment:
+                payment_id = await self._execute(
+                    "SELECT id FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,),
+                    fetchone=True)
+                await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?",
+                                    (True, payment_id[0]), commit=True)
                 asyncio.create_task(update_payment_dates(order_id, payment_date))
-                return
-            await self._execute("UPDATE payment_dates SET payment_sum = ?, is_payment = ? WHERE id = ?", (pay_sum, False, payment_id[0]), commit=True)
+            elif full_payment:
+                await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE order_id = ?",
+                                    (True, order_id), commit=True)
+                asyncio.create_task(update_payment_dates(order_id))
+        else:
+            if month_payment:
+                payment_id = await self._execute(
+                    "SELECT id FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,),
+                    fetchone=True)
+                await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?",
+                                    (True, payment_id[0]), commit=True)
+                asyncio.create_task(update_payment_dates(order_id, payment_date))
+            elif full_payment:
+                await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE order_id = ?",
+                                    (True, order_id), commit=True)
+                asyncio.create_task(update_payment_dates(order_id))
+            else:
+                payment_id = await self._execute(
+                    "SELECT id, payment_sum FROM payment_dates WHERE order_id = ? AND is_payment = False", (order_id,),
+                    fetchone=True)
+                pay_sum = payment_id[1] - payment_sum
+                if pay_sum == 0:
+                    await self._execute("UPDATE payment_dates SET payment_sum = 0, is_payment = ? WHERE id = ?",
+                                        (True, payment_id[0]), commit=True)
+                    asyncio.create_task(update_payment_dates(order_id, payment_date))
+                    return
+                await self._execute("UPDATE payment_dates SET payment_sum = ?, is_payment = ? WHERE id = ?",
+                                    (pay_sum, False, payment_id[0]), commit=True)
 
     async def get_monthly_payment_sum(self):
         return await self._execute("SELECT payment_sum, payment_date FROM payment_dates", fetchone=True)

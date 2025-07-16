@@ -32,3 +32,13 @@ add_order_button = InlineKeyboardBuilder(
     ]
 ).adjust(2).as_markup()
 
+
+confirm_monthly_or_full_payment = InlineKeyboardBuilder(
+    markup=[
+        [
+            InlineKeyboardButton(text="💵 To'lo'vni tasdiqlash", callback_data='confirm_payment'),
+            InlineKeyboardButton(text="❌ Bekor qilish", callback_data='cancel_payment')
+        ]
+    ]
+).adjust(2).as_markup()
+

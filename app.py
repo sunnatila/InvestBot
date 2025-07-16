@@ -34,5 +34,5 @@ async def main() -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_notifications, 'cron', hour=9, minute=0)
+    scheduler.add_job(send_notifications, 'cron', hour=12, minute=33)
     asyncio.run(main())
